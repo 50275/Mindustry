@@ -974,6 +974,9 @@ public class UnitType extends UnlockableContent implements Senseable{
                 if(buildSpeed > 0f){
                     commands.add(UnitCommand.rebuildCommand, UnitCommand.assistCommand);
                 }
+                if(mineTier > 0){
+                    commands.add(UnitCommand.mineCommand);
+                }
             }
 
             //healing, mining and building is only supported for flying units; pathfinding to ambiguously reachable locations is hard.
