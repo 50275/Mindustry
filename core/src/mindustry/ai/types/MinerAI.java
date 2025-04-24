@@ -14,6 +14,7 @@ public class MinerAI extends AIController{
 
     @Override
     public void updateMovement(){
+        unit.updateBoosting(true); // cause pulsar/quasar to boost
         Building core = unit.closestCore();
 
         if(!unit.canMine() || core == null) return;
