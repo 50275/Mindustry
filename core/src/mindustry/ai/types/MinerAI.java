@@ -28,7 +28,7 @@ public class MinerAI extends AIController{
         if(mining){
             if(autoItem != null){
                 targetItem = autoItem;
-            }else if(timer.get(timerTarget2, 60 * 4) || targetItem == null){
+            }else if((timer.get(timerTarget2, 60 * 4) || targetItem == null) && unit.stack.amount > 0){
                 targetItem = unit.type.mineItems.min(i -> indexer.hasOre(i) && unit.canMine(i), i -> core.items.get(i));
             }
 
