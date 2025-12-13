@@ -18,6 +18,7 @@ import arc.scene.ui.layout.*;
 import arc.struct.*;
 import arc.util.*;
 import mindustry.*;
+import mindustry.annotations.Annotations.*;
 import mindustry.content.*;
 import mindustry.content.TechTree.*;
 import mindustry.core.*;
@@ -74,6 +75,13 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
     private Element mainView;
     private CampaignRulesDialog campaignRules = new CampaignRulesDialog();
     private SectorSelectDialog selectDialog = new SectorSelectDialog();
+
+    // planet data for multplayer campaign demo
+    private static byte[] data;
+    private static int[] wavesSurvived;
+    private static int[] wavesPassed;
+    private static int[] damage;
+    private static final int variables = 5;
 
     public PlanetDialog(){
         super("", Styles.fullDialog);
@@ -233,13 +241,130 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         }
     }
 
+
+    @Remote(targets = Loc.client)
+    public static void requestPlanet(@Nullable Player player, int planetID){
+        // There has to be a player to send information...
+        if (player == null) return;
+
+        // TODO only accept certain inputs from certain players
+        // I need to send and receive information that will somehow create a new (fake) planet on the client.
+
+        // how many boolean variables each sector stores
+        // currently: isAttacked, hasBase, hasEnemyBase, hasSave
+        // the total number of bits required is # of sectors * variables
+        final Planet planet = Vars.content.planets().find(u -> u.id == planetID);
+
+        // ensure the array has enough space to handle the data
+        if(data == null || planet.sectors.size * variables > data.length * 8){
+            data = new byte[planet.sectors.size * variables];
+        }
+        // we'll just say wavesSurvived and wavesPassed and damage are either all viable or all unviable
+        if(wavesSurvived == null || planet.sectors.size > wavesSurvived.length){
+            wavesSurvived   = new int[planet.sectors.size];
+            wavesPassed     = new int[planet.sectors.size];
+            damage          = new int[planet.sectors.size];
+        }
+
+        int index = 0;
+        int sector = 0;
+        for(Sector s : planet.sectors){
+            // ignore warning i guess
+            if(s.isAttacked())      data[index >> 3] |= (1 << (index & 7)); index++;
+            if(s.hasBase())         data[index >> 3] |= (1 << (index & 7)); index++;
+            if(s.hasEnemyBase())    data[index >> 3] |= (1 << (index & 7)); index++;
+            if(s.hasSave())         data[index >> 3] |= (1 << (index & 7)); index++;
+            if(s.info.attack)       data[index >> 3] |= (1 << (index & 7)); index++;
+            wavesSurvived[sector] = s.info.wavesSurvived;
+            wavesPassed[sector] = s.info.wavesPassed;
+            damage[sector] = (int) (s.info.damage * 100); // float[] array not supported by typeio
+            sector++;
+        }
+        Call.sendPlanet(player.con, planetID, data, wavesSurvived, wavesPassed, damage);
+    }
+    @Remote(targets = Loc.server, variants = Variant.one)
+    public static void sendPlanet(int planetID, byte[] data, int[] wavesSurvived, int[] wavesPassed, int[] damage){
+        final Planet planet = Vars.content.planets().find(u -> u.id == planetID);
+        // TODO submission failure
+        // it is absolutely illegal to modify the client planets
+        // please understand that the current version of this code can and will absolutely corrupt your saves
+        int index = 0;
+
+        // i have not yet learned to implement bitset
+        // i cannot
+        boolean[] bool = new boolean[data.length * 8];
+        for (byte b : data) {
+            for (int i = 0; i < 8; i++) {
+                bool[index * 8 + i] = (b & (1 << i)) > 0;
+            }
+            index++;
+        }
+        int[] atomic = new int[1];
+        // TODO submission failure you cannot modify existing planet please
+        planet.sectors.replace(sector -> {
+            boolean isAttacked      = bool[atomic[0] * variables + 0];
+            boolean hasBase         = bool[atomic[0] * variables + 1];
+            boolean hasEnemyBase    = bool[atomic[0] * variables + 2];
+            boolean hasSave         = bool[atomic[0] * variables + 3];
+            boolean attack          = bool[atomic[0] * variables + 4];
+            int vwavesSurvived      = wavesSurvived[atomic[0]];
+            int vwavesPassed        = wavesPassed[atomic[0]];
+            int vdamage             = damage[atomic[0]];
+            atomic[0]++;
+
+            if(hasBase){
+                final String s = "\t";
+                Log.info("You own " + String.valueOf(sector)
+                        + s + String.valueOf(isAttacked)
+                        + s + String.valueOf(hasBase)
+                        + s + String.valueOf(hasEnemyBase)
+                        + s + String.valueOf(hasSave));
+            }
+            return new FakeSector(sector, isAttacked, hasBase, hasEnemyBase, hasSave, attack, vwavesSurvived, vwavesPassed, vdamage);
+        });
+        Call.sendChatMessage("received planet");
+    }
+    public static class FakeSector extends Sector{
+        // it looks like I'll need to @Override every method under the sun
+        private boolean isAttacked, hasBase, hasEnemyBase, hasSave;
+        public FakeSector(Sector sector, boolean isAttacked, boolean hasBase, boolean hasEnemyBase, boolean hasSave, boolean attack, int vwavesSurvived, int vwavesPassed, int vdamage) {
+            super(sector.planet, sector.tile);
+            this.isAttacked = isAttacked;
+            this.hasBase = hasBase;
+            this.hasEnemyBase = hasEnemyBase;
+            this.hasSave = hasSave;
+            this.info.attack = attack;
+            this.info.wavesSurvived = vwavesSurvived;
+            this.info.wavesPassed = vwavesPassed;
+            this.info.damage = vdamage / 100f;
+        }
+        @Override
+        public boolean isAttacked(){
+            return isAttacked;
+        }
+        @Override
+        public boolean hasBase(){
+            return hasBase;
+        }
+        @Override
+        public boolean hasEnemyBase(){
+            return hasEnemyBase;
+        }
+        @Override
+        public boolean hasSave(){
+            return hasSave;
+        }
+    }
     /** show with no limitations, just as a map. */
     @Override
-    public Dialog show(){
-        if(net.client()){
-            ui.showInfo("@map.multiplayer");
-            return this;
+    public Dialog show() {
+        if(net.client()) {
+            Call.requestPlanet(Vars.state.getSector().planet.id);
         }
+//        if(false){
+//            ui.showInfo("@map.multiplayer");
+//            return this;
+//        }
 
         //view current planet by default
         if(Vars.state.rules.sector != null){
@@ -260,7 +385,7 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         zoom = 1f;
         state.zoom = 1f;
         state.uiAlpha = 0f;
-        launchSector = Vars.state.getSector();
+        launchSector = Vars.state.getSector(); // Vars.state.rules.sector... why is this a function call? 
         presetShow = 0f;
         showed = false;
         listener = s -> {};
@@ -1383,6 +1508,10 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         }
 
         if(mode == look && !sector.hasBase()){
+            // TODO submission failure
+            // LaunchLoadoutDialog hasn't been implemented, which is bad.
+            // But there's no visual feedback, which is even worse.
+            if(net.client()) return;
             shouldHide = false;
             Sector from = findLauncher(sector);
 
