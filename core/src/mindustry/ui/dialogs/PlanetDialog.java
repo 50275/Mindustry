@@ -1476,7 +1476,7 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         stable.act(0f);
     }
 
-    void playSelected(){
+    public void playSelected(){
         if(selected == null) return;
 
         Sector sector = selected;
@@ -1524,11 +1524,15 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
             }
         }
 
-        if(mode == look && !sector.hasBase()){
+        if(mode == look && (!net.client() && !sector.hasBase() || net.client() && !getSectors(sector.planet).get(sector.id).hasBase())){
             // TODO submission failure
             // LaunchLoadoutDialog hasn't been implemented, which is bad.
             // But there's no visual feedback, which is even worse.
-            if(net.client()) return;
+            if (net.client()){
+                // TODO add LaunchLoadoutDialog
+                ui.showInfo("LaunchLoadoutDialog is not featured in this version.");
+                return;
+            }
             shouldHide = false;
             Sector from = findLauncher(sector);
 
@@ -1579,13 +1583,25 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
                 });
             }
         }else if(mode == select || mode == planetLaunch){
+            // TODO I don't understand this yet
             listener.get(sector);
         }else{
             //sector should have base here
-            control.playSector(sector);
+            if (net.client()){
+                Call.remotePlaySector(sector.planet.id, sector.id);
+            }else{
+                control.playSector(sector);
+            }
         }
 
         if(shouldHide) hide();
+    }
+
+    @Remote(targets=Loc.client)
+    public static void remotePlaySector(Player player, int planetId, int sectorId){
+        // TODO only allow admin to switch sector
+        ui.planet.selectSector(Vars.content.planets().get(planetId).sectors.get(sectorId));
+        ui.planet.playSelected();
     }
 
     public enum Mode{
