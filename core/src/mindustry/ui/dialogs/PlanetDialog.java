@@ -82,7 +82,15 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
     private static int[] wavesPassed;
     private static int[] damage;
     private static final int variables = 5;
+    private static final ObjectMap<Planet, Seq<Sector>> fakePlanet = new ObjectMap<>();
 
+    // this should be private at the end
+    // @returns the sectors to be rendered. By default, this is the normal sectors; as a client; fake sectors
+    public static Seq<Sector> getSectors(Planet planet){
+        Seq<Sector> sectors = fakePlanet.get(planet);
+        if (sectors == null) return planet.sectors;
+        return net.client() ? sectors : planet.sectors;
+    }
     public PlanetDialog(){
         super("", Styles.fullDialog);
 
@@ -270,11 +278,21 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         int sector = 0;
         for(Sector s : planet.sectors){
             // ignore warning i guess
-            if(s.isAttacked())      data[index >> 3] |= (1 << (index & 7)); index++;
-            if(s.hasBase())         data[index >> 3] |= (1 << (index & 7)); index++;
-            if(s.hasEnemyBase())    data[index >> 3] |= (1 << (index & 7)); index++;
-            if(s.hasSave())         data[index >> 3] |= (1 << (index & 7)); index++;
-            if(s.info.attack)       data[index >> 3] |= (1 << (index & 7)); index++;
+            if(s.isAttacked())      data[index >> 3] |= (1 << (index & 7));
+            else                    data[index >> 3] &= ~(1 << (index & 7));
+            index++;
+            if(s.hasBase())         data[index >> 3] |= (1 << (index & 7));
+            else                    data[index >> 3] &= ~(1 << (index & 7));
+            index++;
+            if(s.hasEnemyBase())    data[index >> 3] |= (1 << (index & 7));
+            else                    data[index >> 3] &= ~(1 << (index & 7));
+            index++;
+            if(s.hasSave())         data[index >> 3] |= (1 << (index & 7));
+            else                    data[index >> 3] &= ~(1 << (index & 7));
+            index++;
+            if(s.info.attack)       data[index >> 3] |= (1 << (index & 7));
+            else                    data[index >> 3] &= ~(1 << (index & 7));
+            index++;
             wavesSurvived[sector] = s.info.wavesSurvived;
             wavesPassed[sector] = s.info.wavesPassed;
             damage[sector] = (int) (s.info.damage * 100); // float[] array not supported by typeio
@@ -301,27 +319,30 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         }
         int[] atomic = new int[1];
         // TODO submission failure you cannot modify existing planet please
-        planet.sectors.replace(sector -> {
+        fakePlanet.put(Vars.content.planets().get(planetID), planet.sectors.map(sector -> {
+            // sector...
             boolean isAttacked      = bool[atomic[0] * variables + 0];
             boolean hasBase         = bool[atomic[0] * variables + 1];
             boolean hasEnemyBase    = bool[atomic[0] * variables + 2];
             boolean hasSave         = bool[atomic[0] * variables + 3];
             boolean attack          = bool[atomic[0] * variables + 4];
+
+            // sector.info...
             int vwavesSurvived      = wavesSurvived[atomic[0]];
             int vwavesPassed        = wavesPassed[atomic[0]];
             int vdamage             = damage[atomic[0]];
             atomic[0]++;
 
-            if(hasBase){
-                final String s = "\t";
-                Log.info("You own " + String.valueOf(sector)
-                        + s + String.valueOf(isAttacked)
-                        + s + String.valueOf(hasBase)
-                        + s + String.valueOf(hasEnemyBase)
-                        + s + String.valueOf(hasSave));
-            }
+            // if(hasBase){
+            //     final String s = "\t";
+            //     Log.info("You own " + String.valueOf(sector)
+            //             + s + String.valueOf(isAttacked)
+            //             + s + String.valueOf(hasBase)
+            //             + s + String.valueOf(hasEnemyBase)
+            //             + s + String.valueOf(hasSave));
+            // }
             return new FakeSector(sector, isAttacked, hasBase, hasEnemyBase, hasSave, attack, vwavesSurvived, vwavesPassed, vdamage);
-        });
+        }));
         Call.sendChatMessage("received planet");
     }
     public static class FakeSector extends Sector{
@@ -338,28 +359,17 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
             this.info.wavesPassed = vwavesPassed;
             this.info.damage = vdamage / 100f;
         }
-        @Override
-        public boolean isAttacked(){
-            return isAttacked;
-        }
-        @Override
-        public boolean hasBase(){
-            return hasBase;
-        }
-        @Override
-        public boolean hasEnemyBase(){
-            return hasEnemyBase;
-        }
-        @Override
-        public boolean hasSave(){
-            return hasSave;
-        }
+        @Override public boolean isAttacked(){      return isAttacked; }
+        @Override public boolean hasBase(){         return hasBase; }
+        @Override public boolean hasEnemyBase(){    return hasEnemyBase; }
+        @Override public boolean hasSave(){         return hasSave; }
     }
     /** show with no limitations, just as a map. */
     @Override
     public Dialog show() {
         if(net.client()) {
             Call.requestPlanet(Vars.state.getSector().planet.id);
+
         }
 //        if(false){
 //            ui.showInfo("@map.multiplayer");
@@ -392,20 +402,23 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
 
         newPresets.clear();
 
-        //announce new presets
-        for(SectorPreset preset : content.sectors()){
-            if(preset.unlocked() && preset.sector.preset == preset && !preset.alwaysUnlocked && !preset.sector.info.shown && preset.requireUnlock && !preset.sector.hasBase() && preset.planet == state.planet){
-                newPresets.add(preset.sector);
-                preset.sector.info.shown = true;
-                preset.sector.saveInfo();
+        // the client is not announcing anything
+        if(!net.client()){
+            //announce new presets
+            for(SectorPreset preset : content.sectors()){
+                if(preset.unlocked() && preset.sector.preset == preset && !preset.alwaysUnlocked && !preset.sector.info.shown && preset.requireUnlock && !preset.sector.hasBase() && preset.planet == state.planet){
+                    newPresets.add(preset.sector);
+                    preset.sector.info.shown = true;
+                    preset.sector.saveInfo();
+                }
             }
-        }
 
-        if(newPresets.any()){
-            newPresets.add(state.planet.getLastSector());
-        }
+            if(newPresets.any()){
+                newPresets.add(state.planet.getLastSector());
+            }
 
-        newPresets.reverse();
+            newPresets.reverse();
+        }
         updateSelected();
 
         if(state.planet.getLastSector() != null){
@@ -522,6 +535,7 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
 
         //TODO should this even set `state.planet`? the other lookAt() doesn't, so...
         state.planet = sector.planet;
+        // TODO lookAt
         sector.planet.lookAt(sector, state.camPos);
 
         clampZoom();
@@ -568,10 +582,10 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
 
     @Override
     public void renderSectors(Planet planet){
-
+        Seq<Sector> sectors = getSectors(planet);
         //draw all sector stuff
         if(state.uiAlpha > 0.01f){
-            for(Sector sec : planet.sectors){
+            for(Sector sec : sectors){
                 if(canSelect(sec) || sec.unlocked() || debugSelect){
 
                     Color color =
@@ -614,6 +628,7 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
 
     @Override
     public void renderOverProjections(Planet planet){
+        Seq<Sector> sectors = getSectors(planet);
         Sector hoverOrSelect = hovered != null ? hovered : selected;
         Sector launchFrom = hoverOrSelect != null && !hoverOrSelect.hasBase() ? findLauncher(hoverOrSelect) : null;
 
@@ -626,7 +641,7 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         }
 
         if(state.uiAlpha > 0.001f){
-            for(Sector sec : planet.sectors){
+            for(Sector sec : sectors){
                 if(sec.hasBase()){
                     //draw vulnerable sector attack arc
                     if(planet.campaignRules.sectorInvasion){
@@ -654,9 +669,10 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
 
     @Override
     public void renderProjections(Planet planet){
+        Seq<Sector> sectors = getSectors(planet);
         float iw = 64f/4f;
 
-        for(Sector sec : planet.sectors){
+        for(Sector sec : sectors){
             if(sec != hovered){
                 var preficon = sec.icon();
                 var icon =
@@ -712,11 +728,12 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
     }
 
     boolean selectable(Planet planet){
+        Seq<Sector> sectors = getSectors(planet);
         //TODO what if any sector is selectable?
         //TODO launch criteria - which planets can be launched to? Where should this be defined? Should planets even be selectable?
         if(mode == select) return planet == state.planet;
         if(mode == planetLaunch) return launchSector != null && (launchCandidates.contains(planet) || (planet == launchSector.planet && planet.allowSelfSectorLaunch));
-        return (planet.alwaysUnlocked && planet.isLandable()) || planet.sectors.contains(Sector::hasBase) || debugSelect;
+        return (planet.alwaysUnlocked && planet.isLandable()) || sectors.contains(Sector::hasBase) || debugSelect;
     }
 
     void setup(){
