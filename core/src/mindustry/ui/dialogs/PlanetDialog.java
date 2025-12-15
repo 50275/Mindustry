@@ -76,6 +76,7 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
     private CampaignRulesDialog campaignRules = new CampaignRulesDialog();
     private SectorSelectDialog selectDialog = new SectorSelectDialog();
 
+    // this hurts
     // planet data for multplayer campaign demo
     private static byte[] data;
     private static int[] wavesSurvived;
@@ -83,7 +84,50 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
     private static int[] damage;
     private static final int variables = 5;
     private static final ObjectMap<Planet, Seq<Sector>> fakePlanet = new ObjectMap<>();
+    private static Sector from;
+    private static Sector sector;
+    private static final int[] items = new int[Vars.content.items().size];
+    private static ItemSeq itemSeq;
 
+    private final Runnable onLaunch = () -> {
+        var loadout = universe.getLastLoadout();
+        var schemCore = loadout.findCore();
+        from.removeItems(loadout.requirements());
+        from.removeItems(universe.getLaunchResources());
+
+        Events.fire(new SectorLaunchLoadoutEvent(sector, from, loadout));
+
+        CoreBuild core = player.team().core();
+
+        // TODO animation
+        if (core == null || settings.getBool("skipcoreanimation")) {
+            //just... go there
+            control.playSector(from, sector);
+            //hide only after load screen is shown
+            Time.runTask(8f, this::hide);
+        } else {
+            //hide immediately so launch sector is visible
+            hide();
+
+            //allow planet dialog to finish hiding before actually launching
+            Time.runTask(5f, () -> {
+                Runnable doLaunch = () -> {
+                    renderer.showLaunch(core);
+                    //run with less delay, as the loading animation is delayed by several frames
+                    Time.runTask(core.launchDuration() - 8f, () -> control.playSector(from, sector));
+                };
+
+                //load launchFrom sector right before launching so animation is correct
+                if (!from.isBeingPlayed()) {
+                    //run *after* the loading animation is done
+                    Time.runTask(9f, doLaunch);
+                    control.playSector(from);
+                } else {
+                    doLaunch.run();
+                }
+            });
+        }
+    };
     // this should be private at the end
     // @returns the sectors to be rendered. By default, this is the normal sectors; as a client; fake sectors
     public static Seq<Sector> getSectors(Planet planet){
@@ -395,7 +439,7 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         zoom = 1f;
         state.zoom = 1f;
         state.uiAlpha = 0f;
-        launchSector = Vars.state.getSector(); // Vars.state.rules.sector... why is this a function call? 
+        launchSector = Vars.state.getSector(); // Vars.state.rules.sector... why is this a function call?
         presetShow = 0f;
         showed = false;
         listener = s -> {};
@@ -1479,7 +1523,7 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
     public void playSelected(){
         if(selected == null) return;
 
-        Sector sector = selected;
+        /*Sector */sector = selected;
 
         if(sector.isBeingPlayed()){
             //already at this sector
@@ -1525,16 +1569,8 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         }
 
         if(mode == look && (!net.client() && !sector.hasBase() || net.client() && !getSectors(sector.planet).get(sector.id).hasBase())){
-            // TODO submission failure
-            // LaunchLoadoutDialog hasn't been implemented, which is bad.
-            // But there's no visual feedback, which is even worse.
-            if (net.client()){
-                // TODO add LaunchLoadoutDialog
-                ui.showInfo("LaunchLoadoutDialog is not featured in this version.");
-                return;
-            }
             shouldHide = false;
-            Sector from = findLauncher(sector);
+            /*Sector */from = findLauncher(sector);
 
             if(from == null){
                 //clear loadout information, so only the basic loadout gets used
@@ -1542,45 +1578,21 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
                 //free launch.
                 control.playSector(sector);
             }else{
+                // TODO submission failure
                 CoreBlock block = sector.allowLaunchSchematics() ? (from.info.bestCoreType instanceof CoreBlock b ? b : (CoreBlock)from.planet.defaultCore) : (CoreBlock)from.planet.defaultCore;
-
-                loadouts.show(block, from, sector, () -> {
-                    var loadout = universe.getLastLoadout();
-                    var schemCore = loadout.findCore();
-                    from.removeItems(loadout.requirements());
-                    from.removeItems(universe.getLaunchResources());
-
-                    Events.fire(new SectorLaunchLoadoutEvent(sector, from, loadout));
-
-                    CoreBuild core = player.team().core();
-                    if(core == null || settings.getBool("skipcoreanimation")){
-                        //just... go there
-                        control.playSector(from, sector);
-                        //hide only after load screen is shown
-                        Time.runTask(8f, this::hide);
-                    }else{
-                        //hide immediately so launch sector is visible
-                        hide();
-
-                        //allow planet dialog to finish hiding before actually launching
-                        Time.runTask(5f, () -> {
-                            Runnable doLaunch = () -> {
-                                renderer.showLaunch(core);
-                                //run with less delay, as the loading animation is delayed by several frames
-                                Time.runTask(core.launchDuration() - 8f, () -> control.playSector(from, sector));
-                            };
-
-                            //load launchFrom sector right before launching so animation is correct
-                            if(!from.isBeingPlayed()){
-                                //run *after* the loading animation is done
-                                Time.runTask(9f, doLaunch);
-                                control.playSector(from);
-                            }else{
-                                doLaunch.run();
-                            }
-                        });
-                    }
-                });
+                if (net.client()){
+                    // TODO add LaunchLoadoutDialog
+//                    ui.showInfo("LaunchLoadoutDialog is not featured in this version.");
+                     loadouts.show(block, from, sector, () -> {
+                         // TODO bad variable name
+                         universe.getLaunchResources().each((item, amount) -> items[item.id] = amount);
+                         Call.remoteOnLaunch(sector.planet.id, sector.id, Vars.schematics.writeBase64(loadouts.selected), loadouts.selected.findCore().id, items);
+                     });
+                    hide();
+                }else{
+                    loadouts.show(block, from, sector, onLaunch);
+                    hide();
+                }
             }
         }else if(mode == select || mode == planetLaunch){
             // TODO I don't understand this yet
@@ -1595,13 +1607,54 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         }
 
         if(shouldHide) hide();
-    }
+    };
 
+    // playSelected(). Or, rather, try to.
+    // only for use on sectors you already own
     @Remote(targets=Loc.client)
     public static void remotePlaySector(Player player, int planetId, int sectorId){
         // TODO only allow admin to switch sector
         ui.planet.selectSector(Vars.content.planets().get(planetId).sectors.get(sectorId));
         ui.planet.playSelected();
+    }
+
+    @Remote(targets=Loc.client)
+    // TODO loadout
+    // int[Vars.content.items().size] items
+    //
+    public static void remoteOnLaunch(Player player, int planetId, int sectorId, String schematicBase64, int coreBlockId, int[] items){
+        // TODO fraud detection
+        // TODO sync client items to server items
+        /*
+        * Planet: Does it exist? Can I launch here at all?
+        * Sector: Does it exist? Can I launch here? Am I allowed to switch sectors?
+        * Schematic: Is it valid?
+        * CoreBlockId: Is it actually a coreblock?
+        * items: Is it [array length] valid? Is it possible?
+        */
+
+        // Schematic: Change launch schematic to client schematic. TODO Should I change it back afterward?
+        universe.updateLoadout((CoreBlock) Vars.content.blocks().get(coreBlockId), Schematics.readBase64(schematicBase64));
+
+        // Items: Update launch loadout
+        if (itemSeq == null) itemSeq = new ItemSeq();
+        for(int i=0; i<items.length; i++){
+            itemSeq.set(Vars.content.item(i), items[i]);
+        }
+        universe.updateLaunchResources(itemSeq);
+
+        // Planet; Sector; land in the correct region
+        from = Vars.state.rules.sector;
+        sector = Vars.content.planets().get(planetId).sectors.get(sectorId);
+        ui.planet.onLaunch.run();
+//        ui.planet.selectSector(Vars.content.planets().get(planetId).sectors.get(sectorId));
+//        ui.planet.playSelected();
+
+        // TODO:
+        // 1. Launch schematic
+        // 2. Loadout changes
+        // 3. Difficulty changes
+        // 4. Make planet map not stutter (I won't do this lol)
     }
 
     public enum Mode{
@@ -1613,3 +1666,5 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         planetLaunch
     }
 }
+
+

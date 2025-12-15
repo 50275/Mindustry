@@ -23,7 +23,7 @@ public class LaunchLoadoutDialog extends BaseDialog{
     //total required items
     ItemSeq total = new ItemSeq();
     //currently selected schematic
-    Schematic selected;
+    public Schematic selected; // TODO i don't think i can do this
     //validity of loadout items
     boolean valid;
     //last calculated capacity
@@ -149,8 +149,8 @@ public class LaunchLoadoutDialog extends BaseDialog{
 
         var cell = buttons.button("@launch.text", Icon.ok, () -> {
             universe.updateLoadout(core, selected);
-            confirm.run();
             hide();
+            confirm.run();
         }).disabled(b -> !valid);
 
         if(rows){
