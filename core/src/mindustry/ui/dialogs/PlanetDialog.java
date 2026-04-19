@@ -44,6 +44,8 @@ import static mindustry.Vars.*;
 import static mindustry.graphics.g3d.PlanetRenderer.*;
 import static mindustry.ui.dialogs.PlanetDialog.Mode.*;
 
+import mindustry.annotations.Annotations.*;
+
 public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
     //if true, enables launching anywhere for testing
     public static boolean debugSelect = false, debugSectorAttackEdit, debugShowNumbers = false;
@@ -74,6 +76,74 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
     private Element mainView;
     private SectorSelectDialog selectDialog = new SectorSelectDialog();
 
+    // TODO make private
+    public static final ObjectMap<Planet, Seq<Sector>> fakePlanet = new ObjectMap<>();
+
+    // this should be private at the end
+    // @returns the sectors to be rendered. By default, this is the normal sectors; as a client; fake sectors
+    public static Seq<Sector> getSectors(Planet planet){
+        Seq<Sector> sectors = fakePlanet.get(planet);
+        if (sectors == null) return planet.sectors;
+        return net.client() ? sectors : planet.sectors;
+    }
+
+    @Remote(targets = Loc.client)
+    public static void requestPlanet(@Nullable Player player, int planetID){
+        if (player == null) return;
+        final Planet planet = Vars.content.planets().find(u -> u.id == planetID);
+        if (planet == null) return;
+
+        final int variables = sectorProperties.size;
+        BitSet b = new BitSet(variables * planet.sectors.size);
+        int index = 0;
+        for(Sector sector : planet.sectors){
+            for(var command : sectorProperties){
+                b.write(index, command.get(sector));
+                index++;
+            }
+        }
+        Call.sendPlanet(player.con, planetID, b.getData());
+    }
+    @Remote(targets = Loc.server, variants = Variant.one)
+    public static void sendPlanet(int planetID, @Nullable byte[] data){
+        final Planet planet = Vars.content.planets().find(u -> u.id == planetID);
+        if(planet == null || data == null) return;
+        BitSet b = new BitSet(data);
+        fakePlanet.put(Vars.content.planets().get(planetID), planet.sectors.map(sector -> new FakeSector(sector, b)));
+    }
+    private static final Seq<Boolf<Sector>> sectorProperties = Seq.with(
+            Sector::isAttacked,
+            Sector::hasBase,
+            Sector::hasEnemyBase,
+            Sector::hasSave
+    );
+    public static class FakeSector extends Sector{
+        public boolean isAttacked, hasBase, hasEnemyBase, hasSave;
+        public FakeSector(Sector sector, BitSet data) {
+            super(sector.planet, sector.tile);
+            // preserve preset names
+            this.preset = sector.preset;
+            // essential values (this must exactly match sectorProperties)
+            this.isAttacked     = data.read();
+            this.hasBase        = data.read();
+            this.hasEnemyBase   = data.read();
+            this.hasSave        = data.read();
+            // other values
+        }
+        @Override
+        public boolean isAttacked(){ return isAttacked; }
+        @Override
+        public boolean hasBase(){ return hasBase; }
+        @Override
+        public boolean hasEnemyBase(){ return hasEnemyBase; }
+        @Override
+        public boolean hasSave(){ return hasSave; }
+
+//        public void setIsAttacked(boolean isAttacked){ this.isAttacked = isAttacked; }
+//        public void setHasBase(boolean hasBase){ this.hasBase = hasBase; }
+//        public void setHasEnemyBase(boolean hasEnemyBase){ this.hasEnemyBase = hasEnemyBase; }
+//        public void setHasSave(boolean hasSave){ this.hasSave = hasSave; }
+    }
     public PlanetDialog(){
         super("", Styles.fullDialog);
 
@@ -237,8 +307,8 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
     @Override
     public Dialog show(){
         if(net.client()){
-            ui.showInfo("@map.multiplayer");
-            return this;
+            Call.requestPlanet(Vars.state.getSector().planet.id);
+//            return this;
         }
 
         //view current planet by default
@@ -267,12 +337,14 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
 
         newPresets.clear();
 
-        //announce new presets
-        for(SectorPreset preset : content.sectors()){
-            if(preset.unlocked() && preset.sector.preset == preset && !preset.alwaysUnlocked && !preset.sector.info.shown && preset.requireUnlock && !preset.sector.hasBase() && preset.planet == state.planet){
-                newPresets.add(preset.sector);
-                preset.sector.info.shown = true;
-                preset.sector.saveInfo();
+        if(!net.client()){
+            //announce new presets
+            for(SectorPreset preset : content.sectors()){
+                if(preset.unlocked() && preset.sector.preset == preset && !preset.alwaysUnlocked && !preset.sector.info.shown && preset.requireUnlock && !preset.sector.hasBase() && preset.planet == state.planet){
+                    newPresets.add(preset.sector);
+                    preset.sector.info.shown = true;
+                    preset.sector.saveInfo();
+                }
             }
         }
 
@@ -449,9 +521,9 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
 
     @Override
     public void renderSectors(Planet planet){
-
+        Seq<Sector> sectors = getSectors(planet);
         if(state.uiAlpha > 0.01f){
-            for(Sector sec : planet.sectors){
+            for(Sector sec : sectors){
                 if(sec == selected) continue;
 
                 if(canSelect(sec) || sec.unlocked() || debugSelect){
@@ -501,6 +573,7 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
 
     @Override
     public void renderOverProjections(Planet planet){
+        Seq<Sector> sectors = getSectors(planet);
         Sector hoverOrSelect = hovered != null ? hovered : selected;
         Sector launchFrom = hoverOrSelect != null && !hoverOrSelect.hasBase() ? findLauncher(hoverOrSelect) : null;
 
@@ -513,7 +586,7 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         }
 
         if(state.uiAlpha > 0.001f){
-            for(Sector sec : planet.sectors){
+            for(Sector sec : sectors){
 
                 //draw shield arc
                 if(sec.shieldTarget != null && !sec.isCaptured() && !sec.shieldTarget.isCaptured() && (planet.generator.allowLanding(sec) || planet.generator.allowLanding(sec.shieldTarget))){
@@ -547,9 +620,10 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
 
     @Override
     public void renderProjections(Planet planet){
+        Seq<Sector> sectors = getSectors(planet);
         float iw = 64f/4f;
 
-        for(Sector sec : planet.sectors){
+        for(Sector sec : sectors){
             if(sec != hovered){
                 var preficon = sec.icon();
                 var icon =
@@ -1458,5 +1532,55 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         select,
         /** Launch between planets. */
         planetLaunch
+    }
+    // it might be better to delete this altogether
+    public static class BitSet{
+        private byte[] data;
+        // For reading.
+        private int index = 0;
+        // The number of bits to hold.
+        public BitSet(int capacity){
+            data = new byte[(capacity+7)/8];
+        }
+        public BitSet(byte[] data){
+            this.data = data;
+        }
+        // OOPS
+        public void resize(int capacity){
+            int newByteLength = (capacity + 7) / 8;
+            data = java.util.Arrays.copyOf(data, newByteLength);
+        }
+        private int i(int index){return index / 8;}
+        private byte j(int index){return (byte) (index % 8);}
+
+        public byte[] getData(){
+            return data;
+        }
+
+        // The number of bits that can be held.
+        public int size(){
+            return data.length * 8;
+        }
+        public void write(int index, boolean value){
+            int i = i(index);
+            byte j = j(index);
+            if(value) {
+                data[i] |= (byte) (1 << j);
+            }else{
+                data[i] &= (byte) (~(1 << j));
+            }
+        }
+//        public void write(boolean value){
+//            write(index, value);
+//            index++;
+//        }
+        public boolean read(int index){
+            int i = i(index);
+            byte j = j(index);
+            return (data[i] & (1 << j)) != 0;
+        }
+        public boolean read(){
+            return read(index++);
+        }
     }
 }
