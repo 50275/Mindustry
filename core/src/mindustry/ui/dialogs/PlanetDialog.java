@@ -80,18 +80,25 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
     public static final ObjectMap<Planet, Seq<Sector>> fakePlanet = new ObjectMap<>();
 
     // this should be private at the end
-    // @returns the sectors to be rendered. By default, this is the normal sectors; as a client; fake sectors
+    // @return the sectors to be rendered. As a host, the planet's sectors, as a client, fakeSectors
     public static Seq<Sector> getSectors(Planet planet){
+        if(planet == null) return null;
         Seq<Sector> sectors = fakePlanet.get(planet);
-        if (sectors == null) return planet.sectors;
+        if(sectors == null) return planet.sectors;
         return net.client() ? sectors : planet.sectors;
+    }
+
+    // As a host, @return the provided sector. As a client, @return the corresponding fakeSector.
+    public static Sector getSector(Sector sector){
+        if(sector == null) return null;
+        return net.client() ? getSectors(sector.planet).get(sector.id) : sector;
     }
 
     @Remote(targets = Loc.client)
     public static void requestPlanet(@Nullable Player player, int planetID){
-        if (player == null) return;
+        if(player == null) return;
         final Planet planet = Vars.content.planets().find(u -> u.id == planetID);
-        if (planet == null) return;
+        if(planet == null) return;
 
         final int variables = sectorProperties.size;
         BitSet b = new BitSet(variables * planet.sectors.size);
@@ -121,14 +128,44 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         public boolean isAttacked, hasBase, hasEnemyBase, hasSave;
         public FakeSector(Sector sector, BitSet data) {
             super(sector.planet, sector.tile);
-            // preserve preset names
+            // preserve important details
             this.preset = sector.preset;
+            this.shieldTarget = sector.shieldTarget;
             // essential values (this must exactly match sectorProperties)
             this.isAttacked     = data.read();
             this.hasBase        = data.read();
             this.hasEnemyBase   = data.read();
             this.hasSave        = data.read();
+            // important values
+            // s.info.bestCoreType, required for foundation to launch to numbered
+
             // other values
+        }
+        @Override
+        public boolean isBeingPlayed(){
+            return Vars.state.isGame() && Vars.state.rules.sector.id == this.id && !Vars.state.gameOver;
+        }
+
+        // need to override near() and other stuff
+//        public void setIsAttacked(boolean isAttacked){ this.isAttacked = isAttacked; }
+//        public void setHasBase(boolean hasBase){ this.hasBase = hasBase; }
+//        public void setHasEnemyBase(boolean hasEnemyBase){ this.hasEnemyBase = hasEnemyBase; }
+//        public void setHasSave(boolean hasSave){ this.hasSave = hasSave; }
+
+        // change to FakeSectors
+        @Override
+        public Seq<Sector> near(){
+            Seq<Sector> sectors = super.near();
+            for(int i=0; i<sectors.size; i++){
+                sectors.set(i, getSector(sectors.get(i)));
+            }
+            return sectors;
+        }
+        @Override
+        public void near(Cons<Sector> cons){
+            for(Ptile tile : tile.tiles){
+                cons.get(getSector(planet.getSector(tile)));
+            }
         }
         @Override
         public boolean isAttacked(){ return isAttacked; }
@@ -138,11 +175,6 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         public boolean hasEnemyBase(){ return hasEnemyBase; }
         @Override
         public boolean hasSave(){ return hasSave; }
-
-//        public void setIsAttacked(boolean isAttacked){ this.isAttacked = isAttacked; }
-//        public void setHasBase(boolean hasBase){ this.hasBase = hasBase; }
-//        public void setHasEnemyBase(boolean hasEnemyBase){ this.hasEnemyBase = hasEnemyBase; }
-//        public void setHasSave(boolean hasSave){ this.hasSave = hasSave; }
     }
     public PlanetDialog(){
         super("", Styles.fullDialog);
@@ -507,6 +539,7 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
     }
 
     @Nullable Sector findLauncher(Sector to){
+        if(Vars.net.client()) return Vars.state.getSector();
         if(mode == planetLaunch || to.planet.generator == null) return launchSector;
 
         Sector actualLaunchSector = (launchSector != null && launchSector.planet == to.planet ? launchSector : null);
@@ -1255,7 +1288,7 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
     }
 
     void updateSelected(){
-        Sector sector = selected;
+        Sector sector = getSector(selected);
         Table stable = sectorTop;
 
         if(sector == null){
@@ -1394,7 +1427,8 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
 
         stable.row();
 
-        if(sector.hasBase()){
+        // does not sync sectorinfo yet
+        if(sector.hasBase() && !net.client()){
             stable.button("@stats", Icon.info, Styles.cleart, () -> showStats(sector)).height(40f).fillX().row();
         }
 
@@ -1534,52 +1568,64 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         planetLaunch
     }
     // it might be better to delete this altogether
-    public static class BitSet{
+    public static class BitSet {
         private byte[] data;
         // For reading.
         private int index = 0;
+
         // The number of bits to hold.
-        public BitSet(int capacity){
-            data = new byte[(capacity+7)/8];
+        public BitSet(int capacity) {
+            data = new byte[(capacity + 7) / 8];
         }
-        public BitSet(byte[] data){
+
+        public BitSet(byte[] data) {
             this.data = data;
         }
+
         // OOPS
-        public void resize(int capacity){
+        public void resize(int capacity) {
             int newByteLength = (capacity + 7) / 8;
             data = java.util.Arrays.copyOf(data, newByteLength);
         }
-        private int i(int index){return index / 8;}
-        private byte j(int index){return (byte) (index % 8);}
 
-        public byte[] getData(){
+        private int i(int index) {
+            return index / 8;
+        }
+
+        private byte j(int index) {
+            return (byte) (index % 8);
+        }
+
+        public byte[] getData() {
             return data;
         }
 
         // The number of bits that can be held.
-        public int size(){
+        public int size() {
             return data.length * 8;
         }
-        public void write(int index, boolean value){
+
+        public void write(int index, boolean value) {
             int i = i(index);
             byte j = j(index);
-            if(value) {
+            if (value) {
                 data[i] |= (byte) (1 << j);
-            }else{
+            } else {
                 data[i] &= (byte) (~(1 << j));
             }
         }
-//        public void write(boolean value){
+
+        //        public void write(boolean value){
 //            write(index, value);
 //            index++;
 //        }
-        public boolean read(int index){
+        public boolean read(int index) {
             int i = i(index);
             byte j = j(index);
             return (data[i] & (1 << j)) != 0;
         }
-        public boolean read(){
+
+        public boolean read() {
             return read(index++);
         }
     }

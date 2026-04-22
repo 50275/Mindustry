@@ -56,7 +56,6 @@ public class Sector{
         for(Ptile tile : tile.tiles){
             tmpSeq1.add(planet.getSector(tile));
         }
-
         return tmpSeq1;
     }
 
@@ -68,7 +67,7 @@ public class Sector{
 
     public boolean isNear(Sector other){
         for(var tile : tile.tiles){
-            if(planet.getSector(tile) == other){
+            if(planet.getSector(tile).id == other.id){
                 return true;
             }
         }
