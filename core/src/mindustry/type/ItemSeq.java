@@ -128,6 +128,10 @@ public class ItemSeq implements Iterable<ItemStack>, JsonSerializable{
         total += amount;
     }
 
+    public void remove(ItemSeq seq){
+        seq.each(this::remove);
+    }
+
     public void remove(ItemStack stack){
         add(stack.item, -stack.amount);
     }

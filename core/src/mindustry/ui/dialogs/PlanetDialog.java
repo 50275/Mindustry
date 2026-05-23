@@ -94,12 +94,71 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         return net.client() ? getSectors(sector.planet).get(sector.id) : sector;
     }
 
+    public static Sector getSector(int planetID, int sectorID){
+        if(0 > planetID || planetID >= Vars.content.planets().size) return null;
+        Planet planet = Vars.content.planets().get(planetID);
+        if(planet == null) return null;
+        Sector sector = planet.sectors.get(sectorID);
+        return getSector(sector);
+    }
+    // As a client, switch to a sector the host already owns.
+    @Remote(targets=Loc.client)
+    public static void switchSector(Player player, int planetID, int sectorID){
+        // TODO require admin
+        Sector sector = getSector(planetID, sectorID);
+        if(sector == null || !sector.hasBase()) return;
+        ui.planet.selectSector(sector);
+        ui.planet.playSelected();
+    }
+    // As a client, switch to a sector the host doesn't own.
+    // TODO should I even be calling this directly? this can be inferred when it's called
+    // TODO will fail if the client owns the sector and the host doesn't (just hide() s)
+    // TODO the contents of these functions should be moved to non-remote functions
+    @Remote(targets = Loc.client)
+    public static void switchSector(Player player, int planetID, int sectorID, String schematic, ItemStack[] itemstack){
+        Sector sector = getSector(planetID, sectorID);
+        if(sector == null) return;
+
+        // Launch from the current sector.
+        // Verify our sector has enough resources to do such.
+        Schematic launchSchematic = schematics.readBase64(schematic);
+        // TODO add better launch schematic validation
+        if(!launchSchematic.hasCore()) return;
+        if(itemstack == null) return;
+
+        Sector from = Vars.state.rules.sector;
+        ItemSeq source = from.items();
+
+        ItemSeq loadout = new ItemSeq();
+        loadout.add(itemstack);
+        source.remove(loadout);
+
+        ItemSeq schematicRequirements = launchSchematic.requirements();
+        source.remove(schematicRequirements);
+
+        for(var i : source){
+            // Launch failed.
+            if(i.amount < 0) return;
+        }
+        // Actually remove the items.
+        from.removeItems(loadout);
+        from.removeItems(schematicRequirements);
+
+        // Prepare.
+        universe.updateLoadout(launchSchematic.findCore(), launchSchematic);
+        universe.updateLaunchResources(loadout);
+
+        Events.fire(new SectorLaunchLoadoutEvent(sector, from, launchSchematic));
+
+        // TODO play the landing animation
+        control.playSector(from, sector);
+    }
+
     @Remote(targets = Loc.client)
     public static void requestPlanet(@Nullable Player player, int planetID){
         if(player == null) return;
         final Planet planet = Vars.content.planets().find(u -> u.id == planetID);
         if(planet == null) return;
-
         final int variables = sectorProperties.size;
         BitSet b = new BitSet(variables * planet.sectors.size);
         int index = 0;
@@ -111,6 +170,7 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
         }
         Call.sendPlanet(player.con, planetID, b.getData());
     }
+    // The server sends fake planet data.
     @Remote(targets = Loc.server, variants = Variant.one)
     public static void sendPlanet(int planetID, @Nullable byte[] data){
         final Planet planet = Vars.content.planets().find(u -> u.id == planetID);
@@ -1483,6 +1543,12 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
             return;
         }
 
+        if(net.client() && sector.hasBase()) {
+            Call.switchSector(sector.planet.id, sector.id);
+            hide();
+            return;
+        }
+
         if(sector.preset != null && sector.preset.requireUnlock && sector.preset.locked() && sector.preset.techNode != null && !sector.hasBase()){
             return;
         }
@@ -1510,10 +1576,21 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
                 control.playSector(sector);
             }else{
                 CoreBlock block = sector.allowLaunchSchematics() ? (from.info.bestCoreType instanceof CoreBlock b ? b : (CoreBlock)from.planet.defaultCore) : (CoreBlock)from.planet.defaultCore;
-
+                // TODO implement goofy launch
                 loadouts.show(block, from, sector, () -> {
                     var loadout = universe.getLastLoadout();
                     var schemCore = loadout.findCore();
+                    // Call.switchSector(sector.planet.id, sector.id);
+                    // he he he ha
+                    if(net.client()){
+                        // TODO this should go at the *end* as shown below
+                        // TODO how do I play this animation on both the host and client
+                        Call.switchSector(sector.planet.id, sector.id, Vars.schematics.writeBase64(loadout), universe.getLaunchResources().toArray());
+                        return;
+                    }
+                    // I would need to send:
+                    // 1. `loadout` (schematic)
+                    // 2. universe.getLaunchResources() (loadout data)
                     from.removeItems(loadout.requirements());
                     from.removeItems(universe.getLaunchResources());
 
@@ -1629,4 +1706,5 @@ public class PlanetDialog extends BaseDialog implements PlanetInterfaceRenderer{
             return read(index++);
         }
     }
+
 }
